@@ -38,7 +38,7 @@ public enum IntakeScenario: String, Sendable, CaseIterable, Identifiable {
         case .runawayModel:
             return "The model asks for the same tool forever. Repeats are coalesced for free, so the tool budget never moves — the turn ceiling is what ends the run."
         case .hallucinatedBarcode:
-            return "The model keeps emitting a barcode with a bad check digit. Validation rejects it every time, then the fallback drops the field."
+            return "The model keeps emitting a barcode with a bad check digit. Validation rejects it every turn, then the fallback rebuilds the record from the barcode the reader actually saw — same record as scenario 1, different provenance."
         case .contractViolation:
             return "The model requests an unregistered tool. That is not retried — the run ends and the deterministic path takes over."
         }
@@ -200,6 +200,19 @@ public enum IntakeScenarioCatalog {
         scenario == .groundedThenEmit ? .model : .deterministicFallback
     }
 
+    /// What each scenario is *expected* to spend, which is deliberately tighter
+    /// than the ledger's ceiling.
+    ///
+    /// Pinning the eval's ceiling to `IntakeBudget.singlePhoto.toolCalls` would
+    /// make the check unfalsifiable: the ledger grants `min(request, remaining)`
+    /// against that same number, so "used <= limit" is true by construction. A
+    /// tighter, hand-written number is a real expectation — the runaway case in
+    /// particular passes only because repeats are coalesced, so if coalescing
+    /// broke, its `1` would become `4` and this eval would go red.
+    public static func expectedToolCalls(for scenario: IntakeScenario) -> Int {
+        scenario == .runawayModel ? 1 : 2
+    }
+
     /// The eval suite. Every case pins provenance and a tool-call ceiling; the
     /// grounded case additionally pins the exact record.
     public static func evalCases(currencyCode: String = "USD") -> [IntakeEvalCase] {
@@ -212,7 +225,7 @@ public enum IntakeScenarioCatalog {
                 expectedRecord: scenario == .groundedThenEmit
                     ? .some(expectedRecord(currencyCode: currencyCode))
                     : nil,
-                maximumToolCalls: IntakeBudget.singlePhoto.toolCalls,
+                maximumToolCalls: expectedToolCalls(for: scenario),
                 // The hallucinated-barcode run ends with a fallback record that
                 // is clean precisely because the fallback refuses the bad
                 // barcode. The contract-violation run is clean for the same

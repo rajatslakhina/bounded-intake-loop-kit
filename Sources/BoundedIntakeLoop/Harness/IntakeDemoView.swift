@@ -21,7 +21,12 @@ public final class IntakeDemoModel: ObservableObject {
     }
 
     public func select(_ scenario: IntakeScenario) async {
+        guard !isRunning else { return }
         self.scenario = scenario
+        // Cleared before the new run starts. Otherwise the picker, the summary
+        // and the result card can disagree for as long as the run takes, with
+        // nothing on screen saying the numbers belong to the previous scenario.
+        result = nil
         await run()
     }
 
@@ -196,7 +201,12 @@ public struct IntakeDemoView: View {
 
             if let record = result.record {
                 field("Merchant", record.merchant ?? "—")
-                field("Barcode", record.barcode ?? "— (dropped: failed its check digit)")
+                // "—" and nothing else. The UI does not know *why* the field is
+                // absent — the reader may never have run, or its answer may have
+                // failed its check digit — and a package whose thesis is that a
+                // record should say where it came from must not invent a cause
+                // here. The trace below says which one it was.
+                field("Barcode", record.barcode ?? "—")
                 Divider()
                 ForEach(Array(record.lineItems.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline) {
