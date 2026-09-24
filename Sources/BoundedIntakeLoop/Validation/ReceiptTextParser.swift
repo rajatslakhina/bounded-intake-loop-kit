@@ -169,7 +169,10 @@ public struct ReceiptTextParser: Sendable {
         return negative ? Saturating.multiply(value, -1) : value
     }
 
-    /// Strips a leading or trailing quantity marker (`x2`, `2x`, `2 @`).
+    /// Strips a leading or trailing quantity marker: `x2` or `2x`. Other notations
+    /// (`2 @`, `QTY 2`) are deliberately not recognised — a marker this parser
+    /// misreads becomes a wrong unit price, and reporting one unit at the
+    /// printed extended price is the safer failure.
     func extractQuantity(from label: String) -> (label: String, count: Int) {
         var tokens = label.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         guard !tokens.isEmpty else { return (label, 1) }
