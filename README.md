@@ -2,7 +2,7 @@
 
 **An agent loop that stops for reasons the model does not control.**
 
-iOS 27 made it easy to hand a photo to the on-device model, give it an OCR tool and a barcode reader, and let it iterate until it is satisfied. The part that is not easy — and the part that decides whether this ships — is that *"until it is satisfied"* is a stopping condition owned by a third party. A model having a bad day with a glare-lit receipt will call the same tool six times, emit a total that does not add up, get told so, and try again. On a server that is a cost line. On a phone it is a spinner, a hot battery, and a user who force-quits.
+iOS 26 put a model on the device; iOS 27 added image attachments, per-request tool-calling control and built-in OCR and barcode tools. Between them they made it easy to hand a photo to the on-device model, give it those tools, and let it iterate until it is satisfied. The part that is not easy — and the part that decides whether this ships — is that *"until it is satisfied"* is a stopping condition owned by a third party. A model having a bad day with a glare-lit receipt will call the same tool six times, emit a total that does not add up, get told so, and try again. On a server that is a cost line. On a phone it is a spinner, a hot battery, and a user who force-quits.
 
 `BoundedIntakeLoop` is the other half of that feature: a visual-intake pipeline (photo → validated structured record) where **termination, spend and trust are properties of the loop, not of the provider.** Those bounds are *counted*, not clocked — turns, tool calls and context units — and the one thing a caller cannot enforce is spelled out in [Scope, honestly](#scope-honestly) rather than left for you to find.
 
@@ -18,7 +18,7 @@ photo ──▶ [ mode ladder: required → allowed → none ]
              └────────┬───────────┘
                       ▼
          validated record ──── or ────▶ [ deterministic fallback:
-         provenance: .model              rebuild from OCR alone ]
+         provenance: .model              rebuild from tool evidence ]
                                          provenance: .deterministicFallback
 ```
 
@@ -66,7 +66,7 @@ Three failure modes show up in every agentic feature that reaches a consumer app
 | `IntakeModel` | The provider seam — one method. Adapters for on-device, hosted or scripted models are a conformance away. |
 | `GroundingTool` / `ToolRegistry` | Tool dispatch with per-run request coalescing, atomic across suspension, and a bounded cache. |
 | `RecordValidator` / `GTIN` | The invariants: check digits, totals reconciliation, quantities, currency, line-item cap. |
-| `DeterministicIntake` / `ReceiptTextParser` | The floor. Rebuilds a record from OCR evidence with no model involved. |
+| `DeterministicIntake` / `ReceiptTextParser` | The floor. Rebuilds a record from grounding-tool evidence — OCR lines and barcode reads — with no model involved. |
 | `IntakeTrace` | Bounded ring buffer of `TraceEvent`, reporting what it dropped rather than silently losing its middle. |
 | `IntakeScenarioCatalog` | Five pinned scenarios shared by the tests, the eval harness and the demo app's UI — so a screenshot cannot drift away from a passing test. |
 | `IntakeEvalHarness` | Pins provenance, budget and (where it matters) the exact record — re-runnable on device after an OS update. |
@@ -138,7 +138,7 @@ case .none:                  askForAnotherPhoto(reason: result.termination.descr
 - `ConcurrentBudgetClaimTests` races **512 real concurrent tasks** on a ledger with 7 calls to give away, via `withTaskGroup`, and asserts the grants sum to exactly 7. A concurrency test with no concurrent writer proves nothing, so there is one — and `ToolRegistryTests.testConcurrentIdenticalInvocationsStillRunTheToolOnce` does the same for the coalescing cache, against a tool that deliberately suspends before answering so the race window genuinely exists.
 - `RecordValidatorTests.testAnIntMinTotalIsRejectedRatherThanTrapping` passes `Int.min` as the printed total — the value that makes `abs(declared - computed)` trap. Every other test in that file passes with or without the guard.
 
-**The headline bound is measured from outside the ledger.** Asserting `budget.toolCallsUsed <= budget.toolCallsLimit` proves nothing: `claimToolCalls` returns `min(request, remaining)`, so the comparison is true by construction however the loop behaves. `IntakeLoopTests.testTheToolBoundIsMeasurableFromOutsideTheLedger` and `testTheTurnBoundIsMeasurableFromOutsideTheLedger` instead count the tool's own entries and the model's own turns — counters the ledger does not own — against a model that asks fifty times. Two tautologies were removed from `IntakeEvalHarness` for the same reason: `used <= limit` checks against the harness's own snapshot, which had been written in shouty capitals as if they were live guards. The remaining tool-call check there is falsifiable because `IntakeScenarioCatalog.expectedToolCalls(for:)` is a hand-written number tighter than the ledger's ceiling — the runaway scenario expects `1`, which only holds while coalescing works.
+**The headline bound is measured from outside the ledger.** Asserting `budget.toolCallsUsed <= budget.toolCallsLimit` proves nothing: `claimToolCalls` returns `min(request, remaining)`, so the comparison is true by construction however the loop behaves. `IntakeLoopTests.testTheToolBoundIsMeasurableFromOutsideTheLedger` and `testTheTurnBoundIsMeasurableFromOutsideTheLedger` instead count the tool's own entries and the model's own turns — counters the ledger does not own — against a model that asks fifty times.`IntakeEvalHarness` deliberately does not repeat that `used <= limit` comparison either; its tool-call check is falsifiable instead, because `IntakeScenarioCatalog.expectedToolCalls(for:)` is a hand-written number tighter than the ledger's ceiling — the runaway scenario expects `1`, which only holds while coalescing works.
 
 ---
 
