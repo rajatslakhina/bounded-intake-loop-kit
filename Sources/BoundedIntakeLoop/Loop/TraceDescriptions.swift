@@ -68,6 +68,8 @@ extension TerminationCause: CustomStringConvertible {
             return "contract violation: \(violation)"
         case .modelUnavailable(let reason):
             return "model unavailable: \(reason)"
+        case .cancelled:
+            return "cancelled"
         }
     }
 }

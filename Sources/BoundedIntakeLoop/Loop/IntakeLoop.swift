@@ -167,6 +167,15 @@ public struct IntakeLoop: Sendable {
         let availableTools = await registry.registeredNames
 
         turns: while true {
+            // Checked at every turn boundary. The loop's counted bounds say how
+            // much work a run may do; this is how a user who left the screen
+            // stops it. Honest limit, and it is a contract on conformers rather
+            // than something the loop can enforce: a provider or tool that
+            // ignores `Task.isCancelled` and never returns cannot be bounded
+            // from out here, because Swift has no way to abandon an `await`.
+            if Task.isCancelled {
+                return ModelOutcome(record: nil, cause: .cancelled)
+            }
             guard await ledger.claimTurn() else {
                 return ModelOutcome(record: nil, cause: .turnBudgetExhausted)
             }
@@ -279,19 +288,17 @@ public struct IntakeLoop: Sendable {
         var billable: [ToolInvocation] = []
         var free: [ToolInvocation] = []
         for invocation in invocations {
-            if await registry.cachedPayload(for: invocation) == nil {
-                billable.append(invocation)
-            } else {
+            if await registry.cachedPayload(for: invocation) != nil {
                 free.append(invocation)
-            }
-        }
-
-        // Coalesced repeats are served first and cost nothing.
-        for invocation in free {
-            await trace.record(.toolRequested(invocation, granted: true))
-            if let result = try? await registry.invoke(invocation) {
-                Self.merge(result, into: &evidence)
-                await trace.record(.toolCompleted(result))
+            } else if billable.contains(invocation) {
+                // A repeat *within* the same turn. The registry will serve it
+                // from the cache the first copy populates, so it costs nothing
+                // to run — and billing it would make "coalesced repeats are
+                // free" true only across turns, which is not what the design
+                // claims.
+                free.append(invocation)
+            } else {
+                billable.append(invocation)
             }
         }
 
@@ -313,6 +320,18 @@ public struct IntakeLoop: Sendable {
         }
         for invocation in billable.dropFirst(granted) {
             await trace.record(.toolRequested(invocation, granted: false))
+        }
+
+        // Served last, and only from the cache the paid calls above populated.
+        // A repeat costs nothing whether it repeats an earlier turn or an
+        // earlier line of this one.
+        for invocation in free {
+            guard await registry.cachedPayload(for: invocation) != nil else { continue }
+            await trace.record(.toolRequested(invocation, granted: true))
+            if let result = try? await registry.invoke(invocation) {
+                Self.merge(result, into: &evidence)
+                await trace.record(.toolCompleted(result))
+            }
         }
     }
 
