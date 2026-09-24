@@ -29,7 +29,7 @@ final class ModeLadderTests: XCTestCase {
     }
 
     /// `terminalTurnIndex` is advertised separately from `mode(turnIndex:…)`,
-    /// and `IntakeLoop` relies on the two agreeing. Rather than restating the
+    /// callers size their `IntakeBudget.turns` against it. Rather than restating the
     /// arithmetic both of them perform, this *observes* where `mode` actually
     /// bottoms out by scanning, and asserts the advertised index matches.
     func testTerminalTurnIndexMatchesWhereTheLadderObservablyBottomsOut() {

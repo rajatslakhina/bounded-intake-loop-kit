@@ -205,6 +205,12 @@ final class IntakeLoopTests: XCTestCase {
 
         XCTAssertEqual(result.termination, .cancelled)
         XCTAssertLessThan(result.budget.turnsUsed, 100, "cancellation must beat the turn ceiling here")
+        // The "keeps what it has" half, which is the part the README promises.
+        // An implementation that returned `.cancelled` and skipped the fallback
+        // would satisfy the two assertions above and fail these.
+        XCTAssertNotNil(result.record, "a cancelled run must not discard the evidence it gathered")
+        XCTAssertEqual(result.provenance, .deterministicFallback)
+        XCTAssertEqual(result.record?.declaredTotalMinorUnits, 1810)
     }
 
     // MARK: - Contract violations the catalog does not cover
