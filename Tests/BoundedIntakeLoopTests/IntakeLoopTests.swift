@@ -91,18 +91,88 @@ final class IntakeLoopTests: XCTestCase {
         }
     }
 
-    /// The bound, asserted across every scenario rather than argued in a comment.
-    func testNoScenarioEverExceedsItsBudget() async {
+    /// **The headline bound, measured from outside the ledger.**
+    ///
+    /// Asserting `budget.toolCallsUsed <= budget.toolCallsLimit` proves nothing:
+    /// `claimToolCalls` returns `min(request, remaining)`, so that comparison is
+    /// true by construction no matter how the loop behaves. The only honest
+    /// check counts the work that actually happened, using counters the ledger
+    /// does not own — the tool's own entry count and the model's own turn count.
+    ///
+    /// The model here asks for a *different* invocation every turn, so nothing
+    /// is coalesced and every request is a genuine spend decision. If the ledger
+    /// were ignored, the tool would be entered once per turn; it is entered
+    /// exactly `budget.toolCalls` times.
+    func testTheToolBoundIsMeasurableFromOutsideTheLedger() async {
+        let tool = CountingGroundingTool(
+            name: StandardTool.recognizeText,
+            payload: .recognizedText(IntakeScenarioCatalog.receiptLines)
+        )
+        let script: [ModelTurn] = (0..<50).map { index in
+            .callTools([ToolInvocation(tool: StandardTool.recognizeText, argument: "region-\(index)")])
+        }
+        let model = ScriptedIntakeModel(script: script, whenExhausted: .repeatLast)
+        let budget = IntakeBudget(toolCalls: 3, turns: 40, contextUnits: 10_000_000)
+        let loop = IntakeLoop(
+            model: model,
+            registry: ToolRegistry(tools: [tool]),
+            fallback: DeterministicIntake(currencyCode: "USD"),
+            ladder: ModeLadder(requiredTurns: 1, allowedTurns: 50),
+            budget: budget
+        )
+
+        let result = await loop.run(attachment)
+
+        let toolEntries = await tool.invocationCount
+        XCTAssertEqual(toolEntries, budget.toolCalls, "the tool ran more times than the budget allowed")
+        // With the tool budget spent, the ladder collapses to `.none`, and the
+        // model's next tool request is a contract violation — so the run ends
+        // far short of its 40-turn ceiling.
+        XCTAssertEqual(
+            result.termination,
+            .contractViolation(.calledToolWhileModeWasNone(tool: StandardTool.recognizeText))
+        )
+        let turnsServed = await model.turnsServed
+        XCTAssertEqual(turnsServed, 4)
+    }
+
+    /// The turn ceiling, measured the same way — against the model's own count
+    /// of how many times it was asked, not against the ledger's own snapshot.
+    ///
+    /// This model emits an invalid record forever and never calls a tool, so the
+    /// tool budget never moves and the ladder is configured never to bottom out.
+    /// The turn ceiling is the only thing left that can stop it.
+    func testTheTurnBoundIsMeasurableFromOutsideTheLedger() async {
+        let broken = IntakeRecord(
+            barcode: IntakeScenarioCatalog.hallucinatedBarcodeValue,
+            merchant: "ACME MARKET",
+            currencyCode: "USD"
+        )
+        let model = ScriptedIntakeModel(script: [.emit(broken)], whenExhausted: .repeatLast)
+        let budget = IntakeBudget(toolCalls: 4, turns: 5, contextUnits: 10_000_000)
+        let loop = IntakeLoop(
+            model: model,
+            registry: ToolRegistry(tools: IntakeScenarioCatalog.standardTools()),
+            fallback: DeterministicIntake(currencyCode: "USD"),
+            ladder: ModeLadder(requiredTurns: 0, allowedTurns: 50),
+            budget: budget
+        )
+
+        let result = await loop.run(attachment)
+
+        let turnsServed = await model.turnsServed
+        XCTAssertEqual(turnsServed, budget.turns, "the model was asked more times than the ceiling allowed")
+        XCTAssertEqual(result.termination, .turnBudgetExhausted)
+    }
+
+    /// A weaker but still useful check: the reported snapshot agrees with the
+    /// declared budget for every shipped scenario. Kept deliberately separate
+    /// from the test above so its limits are not mistaken for a proof.
+    func testEveryScenarioReportsTheBudgetItWasGiven() async {
         for scenario in IntakeScenario.allCases {
             let result = await IntakeScenarioCatalog.loop(for: scenario).run(attachment)
-            XCTAssertLessThanOrEqual(
-                result.budget.toolCallsUsed, result.budget.toolCallsLimit,
-                "\(scenario.rawValue) overspent its tool budget"
-            )
-            XCTAssertLessThanOrEqual(
-                result.budget.turnsUsed, result.budget.turnsLimit,
-                "\(scenario.rawValue) overspent its turn budget"
-            )
+            XCTAssertEqual(result.budget.toolCallsLimit, IntakeBudget.singlePhoto.toolCalls)
+            XCTAssertEqual(result.budget.turnsLimit, IntakeBudget.singlePhoto.turns)
         }
     }
 
@@ -180,16 +250,53 @@ final class IntakeLoopTests: XCTestCase {
         let result = await loop.run(attachment)
 
         XCTAssertEqual(result.budget.toolCallsUsed, 3)
+
+        // Two distinct limits, and conflating them would hide a real problem:
+        // requests past `maximumToolRequestsPerTurn` were never read (a
+        // truncation), while the ones the ledger refused were read and declined
+        // (a spending decision).
+        XCTAssertTrue(
+            result.trace.contains(.toolRequestsTruncated(requested: 20, considered: 8)),
+            "the trace must say the list was truncated, not silently shortened"
+        )
         let declined = result.trace.filter {
             if case .toolRequested(_, let granted) = $0 { return !granted }
             return false
         }
-        XCTAssertEqual(declined.count, 17)
+        XCTAssertEqual(declined.count, 5, "8 considered minus the 3 the budget paid for")
         let completed = result.trace.filter {
             if case .toolCompleted = $0 { return true }
             return false
         }
         XCTAssertEqual(completed.count, 3)
+    }
+
+    /// The per-turn cap, measured against the tool's own entry count.
+    func testAnAbsurdToolRequestListIsBoundedBeforeItIsProcessed() async {
+        let tool = CountingGroundingTool(
+            name: StandardTool.recognizeText,
+            payload: .recognizedText(IntakeScenarioCatalog.receiptLines)
+        )
+        let invocations = (0..<50_000).map {
+            ToolInvocation(tool: StandardTool.recognizeText, argument: "r\($0)")
+        }
+        let model = ScriptedIntakeModel(script: [.callTools(invocations)], whenExhausted: .fail)
+        let loop = IntakeLoop(
+            model: model,
+            registry: ToolRegistry(tools: [tool]),
+            fallback: DeterministicIntake(currencyCode: "USD"),
+            budget: IntakeBudget(toolCalls: 4, turns: 6, contextUnits: 10_000_000),
+            traceCapacity: 64,
+            maximumToolRequestsPerTurn: 2
+        )
+
+        let result = await loop.run(attachment)
+
+        let entries = await tool.invocationCount
+        XCTAssertEqual(entries, 2, "only the considered prefix may reach the tool")
+        XCTAssertTrue(
+            result.trace.contains(.toolRequestsTruncated(requested: 50_000, considered: 2))
+        )
     }
 
     func testAContextCeilingOfZeroStopsTheRunBeforeTheModelIsCalled() async {

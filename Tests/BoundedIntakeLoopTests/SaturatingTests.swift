@@ -56,6 +56,18 @@ final class SaturatingTests: XCTestCase {
         XCTAssertEqual(Saturating.divide(450, 2), 225)
     }
 
+    /// `Swift.abs(Int.min)` traps. Both of these would crash the test process
+    /// if the guard were removed rather than merely returning a wrong number.
+    func testAbsoluteValueAndDistanceDoNotTrapAtIntMin() {
+        XCTAssertEqual(Saturating.absoluteValue(Int.min), Int.max)
+        XCTAssertEqual(Saturating.absoluteValue(-7), 7)
+        XCTAssertEqual(Saturating.absoluteValue(7), 7)
+        XCTAssertEqual(Saturating.distance(Int.min, 0), Int.max)
+        XCTAssertEqual(Saturating.distance(0, Int.max), Int.max)
+        XCTAssertEqual(Saturating.distance(1811, 1810), 1)
+        XCTAssertEqual(Saturating.distance(1810, 1811), 1)
+    }
+
     func testUsableAmountRejectsNonFiniteAndOversizedValues() {
         XCTAssertFalse(Saturating.isUsableAmount(.nan))
         XCTAssertFalse(Saturating.isUsableAmount(.infinity))

@@ -72,6 +72,26 @@ final class RecordValidatorTests: XCTestCase {
         XCTAssertTrue(RecordValidator().validate(record).contains(.emptyRecord))
     }
 
+    /// `Int.min` as a printed total.
+    ///
+    /// This is the value that makes `abs(declared - computed)` trap: `Int.min`
+    /// has no positive counterpart, so the reconciliation check has to compute
+    /// its drift with `Saturating.distance` rather than `abs(_:)`. Without that,
+    /// a single model-authored number crashes the app, and every other test in
+    /// this file still passes.
+    func testAnIntMinTotalIsRejectedRatherThanTrapping() {
+        let record = IntakeRecord(
+            lineItems: [LineItem(label: "One", quantity: 1, unitPriceMinorUnits: 0)],
+            declaredTotalMinorUnits: Int.min,
+            currencyCode: "USD"
+        )
+        let failures = RecordValidator(policy: .strict).validate(record)
+        XCTAssertEqual(
+            failures,
+            [.totalMismatch(declared: Int.min, computed: 0, toleranceMinorUnits: 0)]
+        )
+    }
+
     /// A quantity of `Int.max` at a non-zero price overflows the extended price.
     /// The record must be rejected, and the validator must not trap getting there.
     func testSurvivesAnAbsurdQuantityWithoutTrapping() {
@@ -98,8 +118,14 @@ final class ReceiptTextParserTests: XCTestCase {
     func testSubtotalIsSkippedSoTheSumStillReconciles() {
         let parsed = ReceiptTextParser().parse(IntakeScenarioCatalog.receiptLines)
         XCTAssertFalse(parsed.lineItems.contains { $0.label.uppercased().contains("SUBTOTAL") })
-        let summed = parsed.lineItems.reduce(0) { $0 + $1.extendedMinorUnits }
-        XCTAssertEqual(summed, parsed.declaredTotalMinorUnits)
+        // Summed through the production property, not reimplemented inline —
+        // otherwise this test guards a copy of the logic rather than the logic.
+        let record = IntakeRecord(
+            lineItems: parsed.lineItems,
+            declaredTotalMinorUnits: parsed.declaredTotalMinorUnits,
+            currencyCode: "USD"
+        )
+        XCTAssertEqual(record.computedTotalMinorUnits, parsed.declaredTotalMinorUnits)
     }
 
     func testBareIntegersAreNotTreatedAsMoney() {

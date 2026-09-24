@@ -47,14 +47,20 @@ final class GTINTests: XCTestCase {
     /// checker that merely returned "invalid" for everything would not satisfy
     /// it either.
     func testDetectsAdjacentTransposition() {
-        // 4006381333931 → swap the '6' and the '3' that follow "400".
-        let transposed = "4003681333931"
-        guard case .barcodeCheckDigitMismatch(_, let expected, let found)? =
-                GTIN.validate(transposed) else {
+        let original = "4006381333931"
+        XCTAssertNil(GTIN.validate(original), "the fixture must start out valid")
+
+        // Derived, not typed out: swapping payload digits 3 and 4 ('6' and '3',
+        // which differ by 3) must change the weighted sum. Nothing here restates
+        // a literal the checker also produced.
+        var digits = Array(original)
+        digits.swapAt(3, 4)
+        let transposed = String(digits)
+        XCTAssertNotEqual(transposed, original)
+
+        guard case .barcodeCheckDigitMismatch? = GTIN.validate(transposed) else {
             return XCTFail("transposition slipped past the check digit")
         }
-        XCTAssertEqual(found, 1)
-        XCTAssertNotEqual(expected, found)
     }
 
     /// A deliberately broken checker, run side by side with the real one.
