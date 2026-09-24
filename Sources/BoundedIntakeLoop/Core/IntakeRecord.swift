@@ -81,6 +81,11 @@ public enum Money {
     /// to avoid, one line before the number reaches the user's eyes.
     public static func string(minorUnits: Int, scaleDigits: Int = 2) -> String {
         guard scaleDigits > 0 else { return String(minorUnits) }
+        // Clamped before either loop below: `scaleDigits` is a public parameter,
+        // and the zero-padding loop is quadratic in it, so an unclamped
+        // `Int.max` would hang rather than merely print something silly. No real
+        // currency has more than 4 minor-unit digits.
+        let scaleDigits = min(scaleDigits, 18)
         // `Int.min` has no positive magnitude, so `magnitude` (a `UInt`) is used
         // rather than `abs`, which traps on exactly that value.
         let magnitude = minorUnits.magnitude

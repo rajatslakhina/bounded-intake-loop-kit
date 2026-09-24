@@ -33,6 +33,10 @@ public enum TerminationCause: Sendable, Equatable, Codable {
     case contractViolation(ContractViolation)
     /// The model was unavailable, errored, or was never configured.
     case modelUnavailable(String)
+    /// The surrounding task was cancelled — the user left the intake screen.
+    /// The run still returns whatever the fallback can build from the evidence
+    /// gathered so far, rather than discarding it.
+    case cancelled
 }
 
 public enum ContractViolation: Sendable, Equatable, Codable {

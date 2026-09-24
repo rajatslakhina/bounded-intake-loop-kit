@@ -131,7 +131,7 @@ public actor ToolRegistry {
             throw ToolRegistryError.unregistered(invocation.tool)
         }
         if let running = inFlight[invocation] {
-            let payload = await running.value
+            let payload = await Self.value(of: running)
             return ToolResult(invocation: invocation, payload: payload, wasCoalesced: true)
         }
         let task = Task<ToolPayload, Never> {
@@ -145,11 +145,28 @@ public actor ToolRegistry {
         }
         inFlight[invocation] = task
 
-        let payload = await task.value
+        let payload = await Self.value(of: task)
 
         inFlight[invocation] = nil
         store(payload, for: invocation)
         return ToolResult(invocation: invocation, payload: payload, wasCoalesced: false)
+    }
+
+    /// Waits for the shared task, forwarding the waiter's cancellation to it.
+    ///
+    /// An unstructured `Task` does **not** inherit cancellation from whoever
+    /// created it, so without this a cancelled intake run would leave the tool
+    /// running with nobody listening. `withTaskCancellationHandler` closes that:
+    /// cancelling the caller cancels the shared task, which a cooperative tool
+    /// honours. A tool that ignores `Task.isCancelled` still cannot be stopped —
+    /// that is a requirement on conformers, documented rather than pretended
+    /// away, because Swift offers no way to abandon an in-progress `await`.
+    private static func value(of task: Task<ToolPayload, Never>) async -> ToolPayload {
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     /// Insertion-ordered eviction. `cacheOrder` and `cache` are mutated together
