@@ -83,14 +83,13 @@ public struct IntakeEvalHarness: Sendable {
                 "used \(result.budget.toolCallsUsed) tool calls, budgeted \(evalCase.maximumToolCalls)"
             )
         }
-        // The ceiling is a property of the loop, not of the eval: a run that
-        // exceeded it means the bound itself broke, which is worth its own line.
-        if result.budget.toolCallsUsed > result.budget.toolCallsLimit {
-            failures.append("BOUND VIOLATED: tool calls exceeded the ledger limit")
-        }
-        if result.budget.turnsUsed > result.budget.turnsLimit {
-            failures.append("BOUND VIOLATED: turns exceeded the ledger limit")
-        }
+        // Deliberately *not* checked here: "used <= limit" on a snapshot the
+        // ledger itself produced. `BudgetLedger` grants `min(request,
+        // remaining)` and refuses turns past the ceiling, so that comparison is
+        // true by construction and would read as a guarantee while proving
+        // nothing. The real bound is asserted in the test suite against
+        // counters the ledger does not own — the tool's own invocation count
+        // and the model's own turn count.
         if evalCase.requiresCleanValidation && !result.outstandingFailures.isEmpty {
             failures.append("record carried \(result.outstandingFailures.count) outstanding failure(s)")
         }
