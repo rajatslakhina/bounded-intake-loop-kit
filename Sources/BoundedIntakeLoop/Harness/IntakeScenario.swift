@@ -34,7 +34,7 @@ public enum IntakeScenario: String, Sendable, CaseIterable, Identifiable {
         case .groundedThenEmit:
             return "Model calls OCR and the barcode reader, then emits a record that passes every invariant."
         case .modelUnavailable:
-            return "The model throws. The loop grounds the photo itself and rebuilds the record from OCR alone."
+            return "The model throws. The loop runs the grounding tools itself and rebuilds the record from their evidence — OCR and the barcode reader, no model in the loop."
         case .runawayModel:
             return "The model asks for the same tool forever. Repeats are coalesced for free, so the tool budget never moves — the turn ceiling is what ends the run."
         case .hallucinatedBarcode:
