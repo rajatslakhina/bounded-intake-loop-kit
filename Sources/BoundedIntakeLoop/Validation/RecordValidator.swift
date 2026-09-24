@@ -81,7 +81,9 @@ public struct RecordValidator: Sendable {
 
         if let declared = record.declaredTotalMinorUnits, !record.lineItems.isEmpty {
             let computed = record.computedTotalMinorUnits
-            let drift = abs(Saturating.subtract(declared, computed))
+            // `Saturating.distance`, not `abs(_:)`: `declared` comes straight
+            // off the model, and `abs(Int.min)` traps.
+            let drift = Saturating.distance(declared, computed)
             if drift > policy.totalToleranceMinorUnits {
                 failures.append(.totalMismatch(
                     declared: declared,

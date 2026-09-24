@@ -11,10 +11,26 @@ import Foundation
 public struct DeterministicIntake: Sendable {
     public let parser: ReceiptTextParser
     public let currencyCode: String
+    /// Ceiling on how many recognized-text lines are accumulated across *all*
+    /// evidence before parsing.
+    ///
+    /// `ReceiptTextParser.maximumLines` bounds the scan; this bounds the
+    /// accumulation, which is a different thing — without it, four tool results
+    /// of a million lines each become four million strings in one array before
+    /// the parser's cap is ever consulted. Honest limit: a single tool payload
+    /// is already materialised as `[String]` by the time it reaches this
+    /// module, so this caps what the *pipeline* holds, not what a pathological
+    /// tool allocates on its own.
+    public let maximumEvidenceLines: Int
 
-    public init(parser: ReceiptTextParser = ReceiptTextParser(), currencyCode: String) {
+    public init(
+        parser: ReceiptTextParser = ReceiptTextParser(),
+        currencyCode: String,
+        maximumEvidenceLines: Int = 512
+    ) {
         self.parser = parser
         self.currencyCode = currencyCode
+        self.maximumEvidenceLines = max(1, maximumEvidenceLines)
     }
 
     /// Returns `nil` when the evidence contains nothing usable — an honest
@@ -29,7 +45,10 @@ public struct DeterministicIntake: Sendable {
         for result in evidence {
             switch result.payload {
             case .recognizedText(let lines):
-                textLines.append(contentsOf: lines)
+                let room = maximumEvidenceLines - textLines.count
+                if room > 0 {
+                    textLines.append(contentsOf: lines.prefix(room))
+                }
             case .barcode(let value):
                 // Only a barcode that passes its own check digit is accepted.
                 // The fallback holding itself to the same arithmetic it holds
