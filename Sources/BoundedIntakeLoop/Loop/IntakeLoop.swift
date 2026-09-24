@@ -28,6 +28,15 @@ public struct IntakeLoop: Sendable {
     private let ladder: ModeLadder
     private let budget: IntakeBudget
     private let traceCapacity: Int
+    /// Ceiling on how many invocations from a single `.callTools` turn the loop
+    /// will even look at.
+    ///
+    /// The tool *budget* bounds what gets run; this bounds what gets
+    /// **processed**. A model in a degenerate state can name fifty thousand
+    /// invocations in one turn, and walking that list to decline 49,996 of them
+    /// is the same unbounded-work problem one layer up from where the budget
+    /// catches it.
+    private let maximumToolRequestsPerTurn: Int
 
     public init(
         model: (any IntakeModel)?,
@@ -36,8 +45,10 @@ public struct IntakeLoop: Sendable {
         fallback: DeterministicIntake,
         ladder: ModeLadder = .default,
         budget: IntakeBudget = .singlePhoto,
-        traceCapacity: Int = 128
+        traceCapacity: Int = 128,
+        maximumToolRequestsPerTurn: Int = 8
     ) {
+        self.maximumToolRequestsPerTurn = max(1, maximumToolRequestsPerTurn)
         self.model = model
         self.registry = registry
         self.validator = validator
@@ -197,7 +208,18 @@ public struct IntakeLoop: Sendable {
                     await trace.record(.contractViolated(.requestedZeroTools))
                     return ModelOutcome(record: nil, cause: .contractViolation(.requestedZeroTools))
                 }
-                for invocation in invocations {
+                // Truncate before any per-invocation work, so the cost of this
+                // turn is bounded by a constant rather than by the length of a
+                // list the model chose.
+                let considered = Array(invocations.prefix(maximumToolRequestsPerTurn))
+                if considered.count < invocations.count {
+                    await trace.record(.toolRequestsTruncated(
+                        requested: invocations.count,
+                        considered: considered.count
+                    ))
+                }
+
+                for invocation in considered {
                     let registered = await registry.isRegistered(invocation.tool)
                     guard registered else {
                         let violation = ContractViolation.calledUnregisteredTool(tool: invocation.tool)
@@ -210,7 +232,7 @@ public struct IntakeLoop: Sendable {
                 // serves `.none` on the next turn and the model emits from what
                 // it already has. Only the turn ceiling ends the run.
                 await runInvocations(
-                    invocations,
+                    considered,
                     ledger: ledger,
                     trace: trace,
                     evidence: &evidence

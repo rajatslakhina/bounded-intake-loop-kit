@@ -98,6 +98,8 @@ extension TraceEvent: CustomStringConvertible {
             return granted
                 ? "→ \(invocation.tool)"
                 : "→ \(invocation.tool) DECLINED (no budget)"
+        case .toolRequestsTruncated(let requested, let considered):
+            return "requested \(requested) tools in one turn; only the first \(considered) were read"
         case .toolCompleted(let result):
             return result.wasCoalesced
                 ? "← \(result.invocation.tool): \(result.payload) (coalesced, free)"

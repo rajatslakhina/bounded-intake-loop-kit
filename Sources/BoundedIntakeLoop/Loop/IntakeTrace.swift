@@ -11,6 +11,11 @@ public enum TraceEvent: Sendable, Equatable, Codable {
     case runStarted(budget: BudgetSnapshot)
     case turnStarted(index: Int, mode: ToolCallingMode)
     case toolRequested(ToolInvocation, granted: Bool)
+    /// The model asked for more tools in one turn than the loop will even look
+    /// at. Recorded rather than silently dropped, because the difference between
+    /// "the budget declined these" and "we never read these" is the difference
+    /// between a spending decision and a truncation.
+    case toolRequestsTruncated(requested: Int, considered: Int)
     case toolCompleted(ToolResult)
     case draftEmitted(IntakeRecord)
     case validationFailed([ValidationFailure])
