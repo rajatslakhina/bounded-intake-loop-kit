@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux · build (warnings as errors) + test
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      # A clean build, deliberately: `swift build` on an up-to-date tree
+      # compiles nothing and still prints "Build complete!", which would make
+      # the zero-warnings claim below evidence of nothing.
+      - name: Build with warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Test
+        run: swift test
+
+  apple:
+    name: macOS · compile for iOS Simulator
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # `generic/platform=iOS Simulator` on purpose: pinning to a named device
+      # ties the job to whichever simulator runtimes happen to be installed on
+      # that day's runner image, and a compile-only check needs no device.
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild build \
+            -scheme BoundedIntakeLoop \
+            -destination 'generic/platform=iOS Simulator'
