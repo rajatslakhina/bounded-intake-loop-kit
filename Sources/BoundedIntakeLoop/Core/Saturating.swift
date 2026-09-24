@@ -69,6 +69,26 @@ public enum Saturating {
         return overflow ? nil : partial
     }
 
+    /// Magnitude as an `Int`, clamped.
+    ///
+    /// `Swift.abs(Int.min)` traps — `Int.min` has no positive counterpart — and
+    /// `Int.min` is reachable here because `declaredTotalMinorUnits` arrives
+    /// straight off a model. Clamping to `Int.max` loses exactly one unit of
+    /// precision at the single value where precision is already meaningless:
+    /// every caller uses this for a comparison against a tolerance, and both
+    /// `Int.max` and `|Int.min|` are far past any tolerance.
+    @inlinable
+    public static func absoluteValue(_ value: Int) -> Int {
+        if value == Int.min { return Int.max }
+        return value < 0 ? -value : value
+    }
+
+    /// `|lhs - rhs|`, saturating at both ends and never trapping.
+    @inlinable
+    public static func distance(_ lhs: Int, _ rhs: Int) -> Int {
+        absoluteValue(subtract(lhs, rhs))
+    }
+
     /// True when a `Double` is safe to use in a monetary comparison: finite and
     /// within a range where `Double`'s 53-bit significand still represents cents
     /// exactly. Beyond roughly 2^53 minor units the comparison in

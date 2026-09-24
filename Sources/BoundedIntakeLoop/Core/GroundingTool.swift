@@ -79,6 +79,10 @@ public actor ToolRegistry {
     private let tools: [String: any GroundingTool]
     private var cache: [ToolInvocation: ToolPayload] = [:]
     private var cacheOrder: [ToolInvocation] = []
+    /// Invocations currently running. Without this, two concurrent callers both
+    /// miss the cache, both suspend into the tool, and "coalescing" turns out to
+    /// be a property of calling serially rather than a property of the registry.
+    private var inFlight: [ToolInvocation: Task<ToolPayload, Never>] = [:]
     private let cacheLimit: Int
 
     public init(tools: [any GroundingTool], cacheLimit: Int = 32) {
@@ -114,6 +118,11 @@ public actor ToolRegistry {
     /// `.unavailable` payload, because an unregistered tool is a contract
     /// violation by the model and the loop terminates on it, whereas a tool that
     /// ran and found nothing is ordinary evidence.
+    /// Everything from the cache read down to installing the in-flight task runs
+    /// with **no `await`**, so a second caller either sees the cached payload or
+    /// sees the task the first caller installed. There is no window in which two
+    /// callers both decide to run the tool. (`Task { }` is not a suspension
+    /// point; the first `await` is on `task.value`, after the map is written.)
     public func invoke(_ invocation: ToolInvocation) async throws -> ToolResult {
         if let cached = cache[invocation] {
             return ToolResult(invocation: invocation, payload: cached, wasCoalesced: true)
@@ -121,14 +130,24 @@ public actor ToolRegistry {
         guard let tool = tools[invocation.tool] else {
             throw ToolRegistryError.unregistered(invocation.tool)
         }
-        let payload: ToolPayload
-        do {
-            payload = try await tool.invoke(invocation)
-        } catch {
-            // A failing tool is evidence of absence, not a crash: the fallback
-            // path still has whatever the other tools produced.
-            payload = .unavailable(reason: String(describing: error))
+        if let running = inFlight[invocation] {
+            let payload = await running.value
+            return ToolResult(invocation: invocation, payload: payload, wasCoalesced: true)
         }
+        let task = Task<ToolPayload, Never> {
+            do {
+                return try await tool.invoke(invocation)
+            } catch {
+                // A failing tool is evidence of absence, not a crash: the
+                // fallback path still has whatever the other tools produced.
+                return .unavailable(reason: String(describing: error))
+            }
+        }
+        inFlight[invocation] = task
+
+        let payload = await task.value
+
+        inFlight[invocation] = nil
         store(payload, for: invocation)
         return ToolResult(invocation: invocation, payload: payload, wasCoalesced: false)
     }
