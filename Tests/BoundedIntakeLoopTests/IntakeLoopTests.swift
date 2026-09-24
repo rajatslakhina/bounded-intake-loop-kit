@@ -165,15 +165,46 @@ final class IntakeLoopTests: XCTestCase {
         XCTAssertEqual(result.termination, .turnBudgetExhausted)
     }
 
-    /// A weaker but still useful check: the reported snapshot agrees with the
-    /// declared budget for every shipped scenario. Kept deliberately separate
-    /// from the test above so its limits are not mistaken for a proof.
-    func testEveryScenarioReportsTheBudgetItWasGiven() async {
+    /// Each scenario spends exactly what the catalog says it spends.
+    ///
+    /// These are hand-written numbers tighter than the ledger's ceiling, so they
+    /// are falsifiable: if coalescing broke, the runaway scenario's 1 would
+    /// become 4 and this would go red.
+    func testEveryScenarioSpendsExactlyWhatTheCatalogClaims() async {
         for scenario in IntakeScenario.allCases {
             let result = await IntakeScenarioCatalog.loop(for: scenario).run(attachment)
-            XCTAssertEqual(result.budget.toolCallsLimit, IntakeBudget.singlePhoto.toolCalls)
-            XCTAssertEqual(result.budget.turnsLimit, IntakeBudget.singlePhoto.turns)
+            XCTAssertEqual(
+                result.budget.toolCallsUsed,
+                IntakeScenarioCatalog.expectedToolCalls(for: scenario),
+                "\(scenario.rawValue) spent a different number of tool calls than the catalog claims"
+            )
         }
+    }
+
+    /// A cancelled run stops at the next turn boundary and still returns
+    /// whatever the evidence supports, rather than throwing the read away.
+    func testACancelledRunStopsAndKeepsWhatItHas() async {
+        let model = ScriptedIntakeModel(
+            script: [.callTools([ToolInvocation(tool: StandardTool.recognizeText)])],
+            whenExhausted: .repeatLast
+        )
+        let loop = IntakeLoop(
+            model: model,
+            registry: ToolRegistry(tools: IntakeScenarioCatalog.standardTools()),
+            fallback: DeterministicIntake(currencyCode: "USD"),
+            ladder: ModeLadder(requiredTurns: 1, allowedTurns: 50),
+            budget: IntakeBudget(toolCalls: 8, turns: 100, contextUnits: 10_000_000)
+        )
+
+        // Local copies: capturing `self.attachment` would pull the non-Sendable
+        // XCTestCase into the task.
+        let photo = IntakeScenarioCatalog.attachment
+        let task = Task { await loop.run(photo) }
+        task.cancel()
+        let result = await task.value
+
+        XCTAssertEqual(result.termination, .cancelled)
+        XCTAssertLessThan(result.budget.turnsUsed, 100, "cancellation must beat the turn ceiling here")
     }
 
     // MARK: - Contract violations the catalog does not cover
@@ -269,6 +300,38 @@ final class IntakeLoopTests: XCTestCase {
             return false
         }
         XCTAssertEqual(completed.count, 3)
+    }
+
+    /// "Coalesced repeats cost nothing" has to hold *within* a turn too.
+    ///
+    /// A model that names the same uncached invocation four times in one turn
+    /// must be billed once, not four times — otherwise the guarantee is really
+    /// "repeats are free across turns", which is not what the design claims and
+    /// not what a model in a repetition loop actually does.
+    func testDuplicateRequestsWithinOneTurnAreBilledOnce() async {
+        let tool = CountingGroundingTool(
+            name: StandardTool.recognizeText,
+            payload: .recognizedText(IntakeScenarioCatalog.receiptLines)
+        )
+        let invocation = ToolInvocation(tool: StandardTool.recognizeText)
+        let good = IntakeScenarioCatalog.expectedRecord()
+        let model = ScriptedIntakeModel(
+            script: [.callTools([invocation, invocation, invocation, invocation]), .emit(good)],
+            whenExhausted: .emit(good)
+        )
+        let loop = IntakeLoop(
+            model: model,
+            registry: ToolRegistry(tools: [tool]),
+            fallback: DeterministicIntake(currencyCode: "USD"),
+            budget: IntakeBudget(toolCalls: 4, turns: 6, contextUnits: 1_000_000)
+        )
+
+        let result = await loop.run(attachment)
+
+        let entries = await tool.invocationCount
+        XCTAssertEqual(entries, 1, "the tool must run once for four identical requests")
+        XCTAssertEqual(result.budget.toolCallsUsed, 1, "and only one of them may cost budget")
+        XCTAssertEqual(result.provenance, .model)
     }
 
     /// The per-turn cap, measured against the tool's own entry count.

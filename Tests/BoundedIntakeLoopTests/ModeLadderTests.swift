@@ -28,21 +28,21 @@ final class ModeLadderTests: XCTestCase {
         }
     }
 
-    func testTerminalTurnIndexIsWhereTheLadderBottomsOut() {
+    /// `terminalTurnIndex` is advertised separately from `mode(turnIndex:…)`,
+    /// and `IntakeLoop` relies on the two agreeing. Rather than restating the
+    /// arithmetic both of them perform, this *observes* where `mode` actually
+    /// bottoms out by scanning, and asserts the advertised index matches.
+    func testTerminalTurnIndexMatchesWhereTheLadderObservablyBottomsOut() {
         for required in 0...3 {
             for allowed in 0...3 {
                 let ladder = ModeLadder(requiredTurns: required, allowedTurns: allowed)
-                XCTAssertEqual(
-                    ladder.mode(turnIndex: ladder.terminalTurnIndex, toolCallsRemaining: 99),
-                    ToolCallingMode.none
-                )
-                if ladder.terminalTurnIndex > 0 {
-                    XCTAssertNotEqual(
-                        ladder.mode(turnIndex: ladder.terminalTurnIndex - 1, toolCallsRemaining: 99),
-                        ToolCallingMode.none,
-                        "the rung before the terminal one must still allow a tool call"
-                    )
+                let firstNone = (0...32).first {
+                    ladder.mode(turnIndex: $0, toolCallsRemaining: 99) == ToolCallingMode.none
                 }
+                XCTAssertEqual(
+                    firstNone, ladder.terminalTurnIndex,
+                    "mode() bottoms out at \(String(describing: firstNone)) but terminalTurnIndex says \(ladder.terminalTurnIndex)"
+                )
             }
         }
     }
