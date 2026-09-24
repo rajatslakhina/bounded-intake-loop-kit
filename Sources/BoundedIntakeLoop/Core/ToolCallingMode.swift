@@ -88,8 +88,13 @@ public struct ModeLadder: Sendable, Equatable {
     }
 
     /// The turn index at which the ladder is guaranteed to be at `.none`,
-    /// independent of tool budget. Used by ``IntakeLoop`` to bound its own turn
-    /// ceiling and asserted directly in `ModeLadderTests`.
+    /// independent of tool budget.
+    ///
+    /// Advertised for **callers** sizing an `IntakeBudget`: a `turns` ceiling
+    /// below this value means the turn budget, not the ladder, is what will end
+    /// a misbehaving run. ``IntakeLoop`` deliberately does not read it — its
+    /// turn ceiling comes only from ``BudgetLedger``, so the two bounds stay
+    /// genuinely independent and each can be tested in isolation.
     public var terminalTurnIndex: Int {
         Saturating.add(requiredTurns, allowedTurns)
     }
